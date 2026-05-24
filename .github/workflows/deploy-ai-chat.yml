@@ -22,6 +22,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      deployments: write
+    environment:
+      name: Production
+      url: https://ai-chat-361513301328.asia-northeast1.run.app
 
     steps:
       - name: Checkout
@@ -47,6 +51,7 @@ jobs:
           docker push "${{ env.IMAGE }}:latest"
 
       - name: Deploy to Cloud Run
+        id: deploy
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ${{ env.SERVICE }}
