@@ -9,38 +9,65 @@ import {
   deleteConversation,
 } from "@/lib/db/conversation";
 import { SYSTEM_PROMPT } from "@/lib/mastra/agent";
+import type { ImageMediaType } from "@/types/chat";
 
 export const runtime = "nodejs";
 
 const MESSAGE_MAX_LENGTH = 4000;
+const IMAGE_MAX_SIZE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_MEDIA_TYPES: ImageMediaType[] = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
 const MONGODB_OBJECTID_REGEX = /^[a-f\d]{24}$/i;
 
 const app = new Hono().basePath("/api");
 
+interface RequestImage {
+  data: string;
+  mediaType: ImageMediaType;
+}
+
 app.post("/chat", async (c) => {
-  let body: { message?: string; conversationId?: string };
+  let body: { message?: string; conversationId?: string; images?: RequestImage[] };
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: "Invalid JSON" }, 400);
   }
 
-  const { message, conversationId } = body;
+  const { message, conversationId, images } = body;
+  const trimmedMessage = message?.trim() ?? "";
 
-  if (!message || typeof message !== "string" || !message.trim()) {
-    return c.json({ error: "メッセージを入力してくださいませ" }, 400);
+  if (!trimmedMessage && (!images || images.length === 0)) {
+    return c.json({ error: "メッセージまたは画像を入力してくださいませ" }, 400);
   }
-  if (message.length > MESSAGE_MAX_LENGTH) {
+  if (trimmedMessage.length > MESSAGE_MAX_LENGTH) {
     return c.json(
       { error: `メッセージは${MESSAGE_MAX_LENGTH}文字以内でお願いいたしますわ` },
       400
     );
   }
 
+  if (images && images.length > 0) {
+    for (const img of images) {
+      if (!SUPPORTED_MEDIA_TYPES.includes(img.mediaType)) {
+        return c.json({ error: "対応していない画像形式ですの" }, 400);
+      }
+      const byteLength = Math.ceil((img.data.length * 3) / 4);
+      if (byteLength > IMAGE_MAX_SIZE_BYTES) {
+        return c.json({ error: "画像サイズは5MB以内でお願いいたしますわ" }, 400);
+      }
+    }
+  }
+
   let conversation;
   try {
     conversation = await getOrCreateConversation(conversationId);
-    await saveMessage(conversation.id, "user", message.trim());
+    const dbContent = trimmedMessage || "[画像を送信しました]";
+    await saveMessage(conversation.id, "user", dbContent);
   } catch (e) {
     console.error("DB error on chat init:", e);
     return c.json({ error: "データベースエラーが発生してしまいましたの" }, 500);
@@ -53,12 +80,41 @@ app.post("/chat", async (c) => {
       content: m.content,
     }));
 
+  type UserContentPart =
+    | { type: "text"; text: string }
+    | { type: "image"; image: string; mimeType: string };
+
+  const userContent: UserContentPart[] = [];
+  if (images && images.length > 0) {
+    for (const img of images) {
+      userContent.push({
+        type: "image",
+        image: img.data,
+        mimeType: img.mediaType,
+      });
+    }
+  }
+  if (trimmedMessage) {
+    userContent.push({ type: "text", text: trimmedMessage });
+  }
+
   let result;
   try {
     result = streamText({
       model: anthropic("claude-sonnet-4-6"),
       system: SYSTEM_PROMPT,
-      messages: [...history, { role: "user", content: message.trim() }],
+      messages: [
+        ...history.slice(0, -1).map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
+        {
+          role: "user" as const,
+          content: userContent.length === 1 && userContent[0].type === "text"
+            ? userContent[0].text
+            : userContent,
+        },
+      ],
     });
   } catch (e) {
     console.error("AI stream error:", e);
