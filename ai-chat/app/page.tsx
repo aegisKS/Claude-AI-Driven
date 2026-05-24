@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import type { Message } from "@/types/chat";
+import { useState, useRef, useEffect, useCallback } from "react";
+import type { Message, MessageImage, ImageMediaType } from "@/types/chat";
+
+const SUPPORTED_TYPES: ImageMediaType[] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -9,8 +12,11 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("conversationId");
@@ -47,9 +53,62 @@ export default function ChatPage() {
     });
   };
 
+  const processFiles = useCallback((files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    const imageFiles = fileArray.filter((f) => SUPPORTED_TYPES.includes(f.type as ImageMediaType));
+
+    if (imageFiles.length === 0) {
+      setNotice("PNG、JPEG、GIF、WebP 形式の画像のみ対応していますの");
+      return;
+    }
+
+    imageFiles.forEach((file) => {
+      if (file.size > MAX_IMAGE_BYTES) {
+        setNotice(`「${file.name}」は5MBを超えていますの。小さい画像をお使いくださいませ`);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        const base64 = dataUrl.split(",")[1];
+        setPendingImages((prev) => [
+          ...prev,
+          { data: base64, mediaType: file.type as ImageMediaType, preview: dataUrl },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processFiles(e.target.files);
+      e.target.value = "";
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => setIsDragOver(false);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (e.dataTransfer.files.length > 0) {
+      processFiles(e.dataTransfer.files);
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if ((!text && pendingImages.length === 0) || isLoading) return;
 
     setNotice(null);
 
@@ -57,10 +116,12 @@ export default function ChatPage() {
       id: Date.now().toString(),
       role: "user",
       content: text,
+      images: pendingImages.length > 0 ? [...pendingImages] : undefined,
       createdAt: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    setPendingImages([]);
     setIsLoading(true);
 
     const assistantMessage: Message = {
@@ -75,7 +136,14 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, conversationId }),
+        body: JSON.stringify({
+          message: text,
+          conversationId,
+          images: userMessage.images?.map((img) => ({
+            data: img.data,
+            mediaType: img.mediaType,
+          })),
+        }),
       });
 
       if (!res.ok) {
@@ -146,6 +214,7 @@ export default function ChatPage() {
     }
     setMessages([]);
     setConversationId(null);
+    setPendingImages([]);
     localStorage.removeItem("conversationId");
   };
 
@@ -190,34 +259,88 @@ export default function ChatPage() {
                 className="message-avatar"
               />
             )}
-            <div className="message-bubble">{msg.content}</div>
+            <div className="message-bubble">
+              {msg.images && msg.images.length > 0 && (
+                <div className="message-images">
+                  {msg.images.map((img, i) => (
+                    <img
+                      key={i}
+                      src={img.preview}
+                      alt={`添付画像 ${i + 1}`}
+                      className="message-image"
+                    />
+                  ))}
+                </div>
+              )}
+              {msg.content && <span>{msg.content}</span>}
+            </div>
           </div>
         ))}
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="chat-input-area">
-        <button className="clear-button" onClick={clearHistory}>
-          会話をリセット
-        </button>
-        <textarea
-          className="chat-input"
-          rows={1}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onCompositionStart={() => { isComposingRef.current = true; }}
-          onCompositionEnd={() => { isComposingRef.current = false; }}
-          placeholder="メッセージを入力してください..."
-          disabled={isLoading}
-        />
-        <button
-          className="send-button"
-          onClick={sendMessage}
-          disabled={isLoading || !input.trim()}
-        >
-          ➤
-        </button>
+      <div
+        className={`chat-input-area${isDragOver ? " drag-over" : ""}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {pendingImages.length > 0 && (
+          <div className="image-preview-area">
+            {pendingImages.map((img, i) => (
+              <div key={i} className="image-preview-item">
+                <img src={img.preview} alt={`プレビュー ${i + 1}`} />
+                <button
+                  className="image-preview-remove"
+                  onClick={() => removeImage(i)}
+                  aria-label="画像を削除"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="chat-input-row">
+          <button className="clear-button" onClick={clearHistory}>
+            会話をリセット
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            multiple
+            style={{ display: "none" }}
+            onChange={handleFileChange}
+          />
+          <button
+            className="attach-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            aria-label="画像を添付"
+            title="画像を添付"
+          >
+            📎
+          </button>
+          <textarea
+            className="chat-input"
+            rows={1}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={() => { isComposingRef.current = false; }}
+            placeholder="メッセージを入力、または画像をドロップ..."
+            disabled={isLoading}
+          />
+          <button
+            className="send-button"
+            onClick={sendMessage}
+            disabled={isLoading || (!input.trim() && pendingImages.length === 0)}
+          >
+            ➤
+          </button>
+        </div>
       </div>
     </div>
   );
