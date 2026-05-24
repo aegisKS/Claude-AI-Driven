@@ -10,7 +10,8 @@ export async function getOrCreateConversation(conversationId?: string) {
     });
     if (existing) return existing;
   }
-  return prisma.conversation.create({ data: {}, include: { messages: true } });
+  const conversation = await prisma.conversation.create({ data: {} });
+  return { ...conversation, messages: [] };
 }
 
 export async function saveMessage(
@@ -34,8 +35,6 @@ export async function getHistory(conversationId: string) {
 }
 
 export async function deleteConversation(conversationId: string) {
-  await prisma.$transaction([
-    prisma.message.deleteMany({ where: { conversationId } }),
-    prisma.conversation.delete({ where: { id: conversationId } }),
-  ]);
+  await prisma.message.deleteMany({ where: { conversationId } });
+  await prisma.conversation.delete({ where: { id: conversationId } });
 }
