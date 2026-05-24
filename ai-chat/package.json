@@ -1,0 +1,31 @@
+{
+  "name": "ai-chat",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "postinstall": "prisma generate",
+    "migrate": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.78",
+    "@mastra/core": "^1.35.0",
+    "@mastra/memory": "^1.18.2",
+    "@prisma/client": "^6.19.3",
+    "ai": "^6.0.184",
+    "dotenv": "^17.4.2",
+    "hono": "^4.12.19",
+    "next": "16.2.6",
+    "prisma": "^6.19.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}

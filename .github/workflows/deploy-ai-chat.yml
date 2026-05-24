@@ -1,0 +1,66 @@
+name: Deploy ai-chat to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "ai-chat/**"
+      - ".github/workflows/deploy-ai-chat.yml"
+
+env:
+  PROJECT_ID: evident-wind-497304-c9
+  REGION: asia-northeast1
+  REPOSITORY: ai-chat-repo
+  SERVICE: ai-chat
+  IMAGE: asia-northeast1-docker.pkg.dev/evident-wind-497304-c9/ai-chat-repo/ai-chat
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/361513301328/locations/global/workloadIdentityPools/github-actions-pool/providers/github
+          service_account: github-actions@evident-wind-497304-c9.iam.gserviceaccount.com
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and Push Docker image
+        run: |
+          docker build \
+            --tag "${{ env.IMAGE }}:${{ github.sha }}" \
+            --tag "${{ env.IMAGE }}:latest" \
+            ./ai-chat
+
+          docker push "${{ env.IMAGE }}:${{ github.sha }}"
+          docker push "${{ env.IMAGE }}:latest"
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+          env_vars: |
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+          flags: >-
+            --platform=managed
+            --allow-unauthenticated
+            --port=8080
+            --memory=512Mi
+            --cpu=1
+
+      - name: Show deployed URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.url }}"
